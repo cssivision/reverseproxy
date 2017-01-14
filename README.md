@@ -1,4 +1,4 @@
-# Introduce
+# Introduction
 A minimalist proxy library for go, support HTTP and HTTPS by HTTP Tunnel.
 
 Support cancels an in-flight request by closing its connection
