@@ -37,7 +37,7 @@ func main() {
 
 To use proxy server, you should set browser to use the proxy server as an HTTP proxy.
 
-```
+```go
 package main
 
 import (
