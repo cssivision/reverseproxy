@@ -339,15 +339,15 @@ func (p *ReverseProxy) ProxyHTTPS(rw http.ResponseWriter, req *http.Request) {
 
 	err = clientConn.SetDeadline(deadline)
 	if err != nil {
-        p.logf("http: proxy error: %v", err)
-        return
-    }
+		p.logf("http: proxy error: %v", err)
+		return
+	}
 
 	err = proxyConn.SetDeadline(deadline)
 	if err != nil {
-        p.logf("http: proxy error: %v", err)
-        return
-    }
+		p.logf("http: proxy error: %v", err)
+		return
+	}
 
 	_, err = clientConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 	if err != nil {
