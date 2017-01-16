@@ -216,8 +216,8 @@ func addXForwardedForHeader(req *http.Request) {
 		// separated list and fold multiple headers into one.
 		if prior, ok := req.Header["X-Forwarded-For"]; ok {
 			clientIP = strings.Join(prior, ", ") + clientIP
-			req.Header.Set("X-Forwarded-For", clientIP)
 		}
+		req.Header.Set("X-Forwarded-For", clientIP)
 	}
 }
 
