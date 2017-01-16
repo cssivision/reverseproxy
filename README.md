@@ -1,5 +1,5 @@
 # Introduction
-A minimalist proxy library for go, support HTTP and HTTPS by HTTP Tunnel.
+A minimalist proxy library for go, borrow some code from net/http/httputil and add support for HTTPS using HTTP Tunnel
 
 Support cancels an in-flight request by closing its connection
 
@@ -67,3 +67,6 @@ func main() {
 }
 ```
 
+# TODO
+
+* add support for sock proxy
