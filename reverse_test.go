@@ -242,9 +242,9 @@ var proxyQueryTests = []struct {
 }
 
 func TestReverseProxyQuery(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Got-Query", r.URL.RawQuery)
-		w.Write([]byte("hi"))
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("X-Got-Query", r.URL.RawQuery)
+		rw.Write([]byte("hi"))
 	}))
 	defer backend.Close()
 
