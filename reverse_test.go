@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -40,8 +41,8 @@ func TestReverseProxy(t *testing.T) {
 			t.Errorf("handler got Proxy-Connection header value %q", c)
 		}
 
-		if g, e := req.Host, ""; g == e {
-			t.Errorf("backend got Host header %q, want %q", g, e)
+		if c := req.Host; c == "" {
+			t.Errorf("backend got Host header %q", c)
 		}
 
 		rw.Header().Set("X-Foo", "bar")
@@ -121,4 +122,110 @@ func TestReverseProxy(t *testing.T) {
 		t.Errorf("Trailer(X-Trailer) = %q ; want %q", g, e)
 	}
 
+}
+
+func TestReverseProxyStripHeadersPresentInConnection(t *testing.T) {
+	const fakeConnectionToken = "X-Fake-Connection-Token"
+	const backendResponse = "I am the backend"
+
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if c := req.Header.Get(fakeConnectionToken); c != "" {
+			t.Errorf("handler got header %q = %q; want empty", fakeConnectionToken, c)
+		}
+
+		if c := req.Header.Get("Upgrade"); c != "" {
+			t.Errorf("handler got header %q = %q; want empty", "Upgrade", c)
+		}
+
+		rw.Header().Set("Connection", "Upgrade, "+fakeConnectionToken)
+		rw.Header().Set("Upgrade", "should be deleted")
+		rw.Header().Set(fakeConnectionToken, "should be deleted")
+		rw.Write([]byte(backendResponse))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	frontend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		proxyHandler.ServeHTTP(rw, req)
+		if c := req.Header.Get("Upgrade"); c != "original value" {
+			t.Errorf("handler modified header %q = %q; want %q", "Upgrade", c, "original value")
+		}
+	}))
+	defer frontend.Close()
+
+	getReq, _ := http.NewRequest("GET", frontend.URL, nil)
+	getReq.Header.Set("Connection", "Upgrade, "+fakeConnectionToken)
+	getReq.Header.Set("Upgrade", "original value")
+	getReq.Header.Set(fakeConnectionToken, "should be deleted")
+	res, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer res.Body.Close()
+	bodyBytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+
+	if g, e := string(bodyBytes), backendResponse; g != e {
+		t.Errorf("got body %q; want %q", g, e)
+	}
+
+	if c := res.Header.Get("Upgrade"); c != "" {
+		t.Errorf("handler got header %q = %q; want empty", "Upgrade", c)
+	}
+
+	if c := res.Header.Get(fakeConnectionToken); c != "" {
+		t.Errorf("handler got header %q = %q; want empty", fakeConnectionToken, c)
+	}
+}
+
+func TestXForwardedFor(t *testing.T) {
+	const prevForwardedFor = "client ip"
+	const backendResponse = "I am the backend"
+	const backendStatus = 404
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("X-Forwarded-For") == "" {
+			t.Errorf("didn't get X-Forwarded-For header")
+		}
+
+		if !strings.Contains(req.Header.Get("X-Forwarded-For"), prevForwardedFor) {
+			t.Errorf("X-Forwarded-For didn't contain prior data")
+		}
+
+		rw.WriteHeader(backendStatus)
+		rw.Write([]byte(backendResponse))
+	}))
+
+	defer backend.Close()
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	frontend := httptest.NewServer(proxyHandler)
+	defer frontend.Close()
+
+	getReq, _ := http.NewRequest("GET", frontend.URL, nil)
+	getReq.Header.Set("X-Forwarded-For", prevForwardedFor)
+	getReq.Close = true
+	res, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer res.Body.Close()
+
+	if g, e := res.StatusCode, backendStatus; g != e {
+		t.Errorf("got res.StatusCode %d; expected %d", g, e)
+	}
+	bodyBytes, _ := ioutil.ReadAll(res.Body)
+	if g, e := string(bodyBytes), backendResponse; g != e {
+		t.Errorf("got body %q; expected %q", g, e)
+	}
 }

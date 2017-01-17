@@ -253,6 +253,7 @@ func (p *ReverseProxy) ProxyHTTP(rw http.ResponseWriter, req *http.Request) {
 	outreq.Close = false
 
 	// We may modify the header (shallow copied above), so we only copy it.
+	outreq.Header = make(http.Header)
 	copyHeader(outreq.Header, req.Header)
 
 	// Remove hop-by-hop headers listed in the "Connection" header, Remove hop-by-hop headers.
