@@ -1,6 +1,7 @@
 package reverseproxy
 
 import (
+	"bytes"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const fakeHopHeader = "X-Fake-Hop-Header-For-Test"
@@ -243,7 +245,7 @@ var proxyQueryTests = []struct {
 
 func TestReverseProxyQuery(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		rw.Header().Set("X-Got-Query", r.URL.RawQuery)
+		rw.Header().Set("X-Got-Query", req.URL.RawQuery)
 		rw.Write([]byte("hi"))
 	}))
 	defer backend.Close()
@@ -265,5 +267,186 @@ func TestReverseProxyQuery(t *testing.T) {
 		}
 		res.Body.Close()
 		frontend.Close()
+	}
+}
+
+func TestReverseProxyFlushInterval(t *testing.T) {
+	const expected = "hi"
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Write([]byte(expected))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	proxyHandler.FlushInterval = time.Microsecond
+
+	done := make(chan bool)
+	onExitFlushLoop = func() { done <- true }
+
+	frontend := httptest.NewServer(proxyHandler)
+	defer frontend.Close()
+
+	getReq, _ := http.NewRequest("GET", frontend.URL, nil)
+	getReq.Close = true
+	res, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer res.Body.Close()
+
+	bodyBytes, _ := ioutil.ReadAll(res.Body)
+	if g, e := string(bodyBytes), expected; g != e {
+		t.Errorf("got body %q; expected %q", g, e)
+	}
+
+	select {
+	case <-done:
+		// do nothing
+	case <-time.After(3 * time.Second):
+		t.Errorf("maxLatencyWriter flushLoop() never exited")
+	}
+}
+
+func TestReverseProxyCancelation(t *testing.T) {
+	const backendResponse = "I am the backend"
+
+	reqInFlight := make(chan bool)
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		close(reqInFlight)
+
+		select {
+		case <-time.After(time.Second * 3):
+			t.Errorf("Handler never saw CloseNotify")
+		case <-rw.(http.CloseNotifier).CloseNotify():
+			// do nothing
+		}
+
+		rw.WriteHeader(http.StatusOK)
+		rw.Write([]byte(backendResponse))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	proxyHandler.ErrorLog = log.New(ioutil.Discard, "", 0)
+	frontend := httptest.NewServer(proxyHandler)
+	defer frontend.Close()
+
+	getReq, err := http.NewRequest("GET", frontend.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		<-reqInFlight
+		http.DefaultTransport.(*http.Transport).CancelRequest(getReq)
+	}()
+
+	res, err := http.DefaultClient.Do(getReq)
+
+	if res != nil {
+		t.Errorf("got response %v; want nil", res.Status)
+	}
+
+	if err == nil {
+		t.Error("DefaultClient.Do() returned nil error; want non-nil error")
+	}
+}
+
+func TestReverProxyPost(t *testing.T) {
+	const backendResponse = "I am the backend"
+	const backendStatus = 200
+	var requestBody = bytes.Repeat([]byte("a"), 1<<20)
+
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		requestData, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			t.Errorf("Backend body read = %v", err)
+		}
+
+		if len(requestData) != len(requestBody) {
+			t.Errorf("Backend read %d request body bytes; want %d", len(requestData), len(requestBody))
+		}
+
+		if !bytes.Equal(requestData, requestBody) {
+			t.Error("Backend read wrong request body.")
+		}
+
+		rw.Write([]byte(backendResponse))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	frontend := httptest.NewServer(proxyHandler)
+	defer frontend.Close()
+
+	res, err := http.Post(frontend.URL, "", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+
+	bodyBytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g, e := string(bodyBytes), backendResponse; g != e {
+		t.Errorf("got response %v, want %v", g, e)
+	}
+}
+
+func TestHTTPTunnel(t *testing.T) {
+	const backendResponse = "I am the backend"
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Write([]byte(backendResponse))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyHandler := NewReverseProxy(backendURL)
+	frontend := httptest.NewServer(proxyHandler)
+	defer frontend.Close()
+
+	frontendURL, err := url.Parse(frontend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	getReq := &http.Request{
+		Method: "CONNECT",
+		URL: &url.URL{
+			Host:   frontendURL.Host,
+			Scheme: frontendURL.Scheme,
+			Path:   "google.com:80",
+		},
+		Header: http.Header{},
+	}
+
+	res, err := http.DefaultTransport.(*http.Transport).RoundTrip(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.Status != "200 OK" {
+		t.Errorf("got response status %v, want %v", res.Status, "200 OK")
 	}
 }
