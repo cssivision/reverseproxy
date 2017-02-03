@@ -1,5 +1,5 @@
 # Introduction
-A minimalist proxy library for go, borrow some code from net/http/httputil and add support for HTTPS using HTTP Tunnel
+A minimalist proxy library for go, inspired by `net/http/httputil` and add support for HTTPS using HTTP Tunnel
 
 Support cancels an in-flight request by closing it's connection
 
