@@ -69,4 +69,4 @@ func main() {
 
 # TODO
 
-* add support for sock proxy
+* add support for socks proxy
