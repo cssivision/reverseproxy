@@ -66,7 +66,3 @@ func main() {
     }))
 }
 ```
-
-# TODO
-
-* add support for socks proxy
